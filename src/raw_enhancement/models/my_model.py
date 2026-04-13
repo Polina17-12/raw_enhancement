@@ -24,9 +24,9 @@ class LightweightUNet(nn.Module):
     def _conv_block(self, in_channels, out_channels):
         return nn.Sequential(
             nn.Conv2d(in_channels, out_channels, kernel_size=3, padding=1),
-            nn.ReLU(inplace=True),
+            nn.LeakyReLU(0.2, inplace=True),
             nn.Conv2d(out_channels, out_channels, kernel_size=3, padding=1),
-            nn.ReLU(inplace=True)
+            nn.LeakyReLU(0.2, inplace=True)
         )
 
     def forward(self, x):

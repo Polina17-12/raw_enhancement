@@ -41,3 +41,8 @@ def unpack_to_rgb_hybrid(tensor, wb_red=2.4, wb_blue=1.8):
     rgb_final = rgb_clahe ** (1/2.2)
 
     return np.clip(rgb_final, 0.0, 1.0)
+
+
+def process_with_native_isp(raw_path, model, device="cpu"):
+    """Placeholder for native ISP rendering (full implementation will be added in next commit)."""
+    raise NotImplementedError("process_with_native_isp placeholder — full implementation in next commit")
