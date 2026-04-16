@@ -3,26 +3,52 @@ import tempfile
 import shutil
 import numpy as np
 from fastapi import FastAPI, UploadFile, File, Form
-from fastapi.responses import FileResponse
+from fastapi.responses import FileResponse, RedirectResponse
+from fastapi.staticfiles import StaticFiles
 from fastapi.staticfiles import StaticFiles
 import torch
 from PIL import Image
 import sys
+import sqlite3
+import uuid
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "src"))
 
 from raw_enhancement.models.my_model import LightweightUNet
 from raw_enhancement.utils.processing import process_with_native_isp
 
-from fastapi.responses import RedirectResponse
 app = FastAPI()
 
+# Инициализация базы данных SQLite
+DB_PATH = "history.db"
+HISTORY_DIR = os.path.join("static", "history")
+os.makedirs(HISTORY_DIR, exist_ok=True)
+
+def init_db():
+    conn = sqlite3.connect(DB_PATH)
+    cursor = conn.cursor()
+    cursor.execute("""
+        CREATE TABLE IF NOT EXISTS history (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            filename TEXT,
+            output_img TEXT,
+            strength REAL,
+            exposure REAL,
+            temp REAL,
+            timestamp DATETIME DEFAULT CURRENT_TIMESTAMP
+        )
+    """)
+    conn.commit()
+    conn.close()
+
+init_db()
+
+app.mount("/ui", StaticFiles(directory="static", html=True), name="static")
 
 @app.get("/")
 async def root():
     return RedirectResponse(url="/ui")
 
-app.mount("/ui", StaticFiles(directory="static", html=True), name="static")
 
 print("Загрузка нейросети...")
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
@@ -51,7 +77,7 @@ async def process_raw(
 ):
     import rawpy
 
-    temp_raw = f"temp_{file.filename}"
+    temp_raw = f"temp_{uuid.uuid4().hex}_{file.filename}"
     with open(temp_raw, "wb") as buffer:
         shutil.copyfileobj(file.file, buffer)
     ai_image = process_with_native_isp(temp_raw, model, device).astype(np.float32)
@@ -78,9 +104,42 @@ async def process_raw(
 
     final_image = np.clip(final_image, 0, 255).astype(np.uint8)
 
-    output_filename = "result_output.jpg"
-    img_pil = Image.fromarray(final_image)
-    img_pil.save(output_filename, quality=95)
 
+    unique_filename = f"result_{uuid.uuid4().hex[:8]}.jpg"
+    output_path = os.path.join(HISTORY_DIR, unique_filename)
+    
+    img_pil = Image.fromarray(final_image)
+    img_pil.save(output_path, quality=95)
     os.remove(temp_raw)
-    return FileResponse(output_filename, media_type="image/jpeg")
+
+    # Сохраняем метаданные в SQLite
+    conn = sqlite3.connect(DB_PATH)
+    cursor = conn.cursor()
+    cursor.execute(
+        "INSERT INTO history (filename, output_img, strength, exposure, temp) VALUES (?, ?, ?, ?, ?)",
+        (file.filename, unique_filename, strength, exposure, temp)
+    )
+    conn.commit()
+    conn.close()
+
+    return FileResponse(output_path, media_type="image/jpeg")
+
+# Новый эндпоинт для получения истории
+@app.get("/api/history")
+async def get_history():
+    conn = sqlite3.connect(DB_PATH)
+    cursor = conn.cursor()
+    cursor.execute("SELECT id, filename, output_img, strength, exposure, temp FROM history ORDER BY id DESC")
+    rows = cursor.fetchall()
+    conn.close()
+    
+    return [
+        {
+            "id": r[0],
+            "filename": r[1],
+            "output_img": f"/ui/history/{r[2]}", # путь доступен через StaticFiles
+            "strength": r[3],
+            "exposure": r[4],
+            "temp": r[5]
+        } for r in rows
+    ]
