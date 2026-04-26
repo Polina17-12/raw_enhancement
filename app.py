@@ -5,7 +5,6 @@ import numpy as np
 from fastapi import FastAPI, UploadFile, File, Form
 from fastapi.responses import FileResponse, RedirectResponse
 from fastapi.staticfiles import StaticFiles
-from fastapi.staticfiles import StaticFiles
 import torch
 from PIL import Image
 import sys
@@ -98,21 +97,27 @@ async def process_raw(
         final_image = final_image * expo_factor
 
     if temp != 0.0:
-        temp_shift = temp * 0.5 
+        temp_shift = temp * 0.5
         final_image[:, :, 0] += temp_shift
         final_image[:, :, 2] -= temp_shift
 
     final_image = np.clip(final_image, 0, 255).astype(np.uint8)
 
+    unique_id = uuid.uuid4().hex[:8]
+    unique_filename = f"result_{unique_id}.jpg"
+    orig_filename = f"orig_{unique_id}.jpg"
 
-    unique_filename = f"result_{uuid.uuid4().hex[:8]}.jpg"
     output_path = os.path.join(HISTORY_DIR, unique_filename)
-    
+    orig_output_path = os.path.join(HISTORY_DIR, orig_filename)
+
     img_pil = Image.fromarray(final_image)
     img_pil.save(output_path, quality=95)
+
+    orig_image_uint8 = np.clip(orig_image, 0, 255).astype(np.uint8)
+    Image.fromarray(orig_image_uint8).save(orig_output_path, quality=95)
+
     os.remove(temp_raw)
 
-    # Сохраняем метаданные в SQLite
     conn = sqlite3.connect(DB_PATH)
     cursor = conn.cursor()
     cursor.execute(
@@ -122,9 +127,11 @@ async def process_raw(
     conn.commit()
     conn.close()
 
-    return FileResponse(output_path, media_type="image/jpeg")
+    return {
+        "processed": f"/ui/history/{unique_filename}",
+        "original": f"/ui/history/{orig_filename}"
+    }
 
-# Новый эндпоинт для получения истории
 @app.get("/api/history")
 async def get_history():
     conn = sqlite3.connect(DB_PATH)
@@ -137,7 +144,7 @@ async def get_history():
         {
             "id": r[0],
             "filename": r[1],
-            "output_img": f"/ui/history/{r[2]}", # путь доступен через StaticFiles
+            "output_img": f"/ui/history/{r[2]}",
             "strength": r[3],
             "exposure": r[4],
             "temp": r[5]
