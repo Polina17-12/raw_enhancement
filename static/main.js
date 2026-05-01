@@ -3,9 +3,31 @@ const fileName = document.getElementById('file-name');
 const processBtn = document.getElementById('process-btn');
 const loader = document.getElementById('loader');
 const resultContainer = document.getElementById('result-container');
-const resultImg = document.getElementById('result-img');
 const placeholder = document.getElementById('placeholder');
 const filmstrip = document.getElementById('filmstrip-items');
+
+const comparisonSlider = document.getElementById('comparison-slider');
+const sliderOverlay = document.getElementById('slider-overlay');
+const sliderLine = document.getElementById('slider-line');
+const beforeImg = document.getElementById('before-img');
+const afterImg = document.getElementById('after-img');
+
+// Логика движения ползунка
+comparisonSlider.addEventListener('input', (e) => {
+    const val = e.target.value + '%';
+    sliderOverlay.style.width = val;
+    sliderLine.style.left = val;
+});
+
+// Синхронизация размеров скрытой картинки с оригиналом
+function syncSizes() {
+    if (beforeImg.complete) {
+        afterImg.style.width = beforeImg.offsetWidth + 'px';
+        afterImg.style.height = beforeImg.offsetHeight + 'px';
+    }
+}
+beforeImg.addEventListener('load', syncSizes);
+window.addEventListener('resize', syncSizes);
 
 // Связываем ползунки с текстом значений
 const sliders = ['strength', 'exposure', 'temp'];
@@ -23,7 +45,7 @@ async function loadHistory() {
         const response = await fetch('/api/history');
         if (response.ok) {
             const data = await response.json();
-            filmstrip.innerHTML = ''; // Очищаем ленту
+            filmstrip.innerHTML = ''; 
             data.forEach(item => {
                 appendHistoryCard(item);
             });
@@ -42,20 +64,28 @@ function appendHistoryCard(item) {
         <div class="info" title="${item.filename}">${item.filename}</div>
     `;
     
-    // КЛЮЧЕВАЯ ФИЧА: При клике на историю восстанавливаем параметры и картинку!
+    // При клике на историю восстанавливаем параметры и картинку
     card.addEventListener('click', () => {
         placeholder.style.display = 'none';
         loader.style.display = 'none';
         resultContainer.style.display = 'block';
-        resultImg.src = item.output_img;
+        
+        // Вычисляем путь к оригиналу на лету
+        const origPath = item.output_img.replace('result_', 'orig_');
+        beforeImg.src = origPath;
+        afterImg.src = item.output_img;
+        
+        // Центрируем ползунок при переключении истории
+        comparisonSlider.value = 50;
+        sliderOverlay.style.width = '50%';
+        sliderLine.style.left = '50%';
+        setTimeout(syncSizes, 50);
         
         // Переставляем ползунки
         document.getElementById('strength').value = item.strength;
         document.getElementById('strength-val').innerText = item.strength + '%';
-        
         document.getElementById('exposure').value = item.exposure;
-        document.getElementById('expo-val').innerText = item.exposure;
-        
+        document.getElementById('exposure-val').innerText = item.exposure;
         document.getElementById('temp').value = item.temp;
         document.getElementById('temp-val').innerText = item.temp;
     });
@@ -71,7 +101,7 @@ fileInput.addEventListener('change', (e) => {
     }
 });
 
-// Обработка кнопки
+// Обработка кнопки запуска
 processBtn.addEventListener('click', async () => {
     if (fileInput.files.length === 0) {
         alert('Пожалуйста, выберите RAW файл!');
@@ -95,14 +125,21 @@ processBtn.addEventListener('click', async () => {
         });
 
         if (response.ok) {
-            const blob = await response.blob();
-            resultImg.src = URL.createObjectURL(blob);
+            const data = await response.json(); 
             
+            beforeImg.src = data.original;
+            afterImg.src = data.processed;
+            
+            // Сбрасываем ползунок по центру
+            comparisonSlider.value = 50;
+            sliderOverlay.style.width = '50%';
+            sliderLine.style.left = '50%';
+
             loader.style.display = 'none';
             resultContainer.style.display = 'block';
+            setTimeout(syncSizes, 50);
             
-            // После успешной генерации обновляем ленту истории
-            loadHistory();
+            loadHistory(); 
         } else {
             alert('Ошибка нейросети.');
             loader.style.display = 'none';
