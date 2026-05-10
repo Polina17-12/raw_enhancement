@@ -11,6 +11,19 @@ const sliderOverlay = document.getElementById('slider-overlay');
 const sliderLine = document.getElementById('slider-line');
 const beforeImg = document.getElementById('before-img');
 const afterImg = document.getElementById('after-img');
+const downloadBtn = document.getElementById('download-btn');
+
+// Логика управления анонимными сессиями
+function getSessionId() {
+    let sessionId = localStorage.getItem('raw_converter_session_id');
+    if (!sessionId) {
+        // Генерируем случайный уникальный ключ, если его еще нет
+        sessionId = 'session_' + Math.random().toString(36).substr(2, 9) + '_' + Date.now();
+        localStorage.setItem('raw_converter_session_id', sessionId);
+    }
+    return sessionId;
+}
+const currentSessionId = getSessionId();
 
 // Логика движения ползунка
 comparisonSlider.addEventListener('input', (e) => {
@@ -42,7 +55,7 @@ sliders.forEach(id => {
 // Функция загрузки истории из БД
 async function loadHistory() {
     try {
-        const response = await fetch('/api/history');
+        const response = await fetch(`/api/history?session_id=${currentSessionId}`);
         if (response.ok) {
             const data = await response.json();
             filmstrip.innerHTML = ''; 
@@ -69,7 +82,8 @@ function appendHistoryCard(item) {
         placeholder.style.display = 'none';
         loader.style.display = 'none';
         resultContainer.style.display = 'block';
-        
+        downloadBtn.style.display = 'flex';
+
         // Вычисляем путь к оригиналу на лету
         const origPath = item.output_img.replace('result_', 'orig_');
         beforeImg.src = origPath;
@@ -110,6 +124,7 @@ processBtn.addEventListener('click', async () => {
 
     placeholder.style.display = 'none';
     resultContainer.style.display = 'none';
+    downloadBtn.style.display = 'none';
     loader.style.display = 'block';
 
     const formData = new FormData();
@@ -117,6 +132,7 @@ processBtn.addEventListener('click', async () => {
     formData.append('strength', document.getElementById('strength').value);
     formData.append('exposure', document.getElementById('exposure').value);
     formData.append('temp', document.getElementById('temp').value);
+    formData.append('session_id', currentSessionId);
 
     try {
         const response = await fetch('/api/process', {
@@ -137,6 +153,7 @@ processBtn.addEventListener('click', async () => {
 
             loader.style.display = 'none';
             resultContainer.style.display = 'block';
+            downloadBtn.style.display = 'flex';
             setTimeout(syncSizes, 50);
             
             loadHistory(); 
@@ -154,3 +171,30 @@ processBtn.addEventListener('click', async () => {
 
 // Загружаем историю при старте страницы
 window.addEventListener('DOMContentLoaded', loadHistory);
+
+// Обработка скачивания PNG
+downloadBtn.addEventListener('click', async () => {
+    const imgUrl = afterImg.src;
+    if (!imgUrl) return;
+
+    try {
+        const response = await fetch(imgUrl);
+        const blob = await response.blob();
+        const url = window.URL.createObjectURL(blob);
+        
+        const a = document.createElement('a');
+        a.style.display = 'none';
+        a.href = url;
+        // Задаем имя файла и расширение PNG
+        a.download = `Enhanced_${new Date().getTime()}.png`; 
+        
+        document.body.appendChild(a);
+        a.click();
+        
+        window.URL.revokeObjectURL(url);
+        a.remove();
+    } catch (e) {
+        console.error("Ошибка при скачивании", e);
+        alert("Не удалось скачать изображение.");
+    }
+});
