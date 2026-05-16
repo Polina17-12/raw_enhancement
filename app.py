@@ -8,8 +8,12 @@ from fastapi.staticfiles import StaticFiles
 import torch
 from PIL import Image
 import sys
-import sqlite3
 import uuid
+import datetime
+
+# Импорты для работы с PostgreSQL через SQLAlchemy
+from sqlalchemy import create_engine, Column, Integer, String, Float, DateTime, desc
+from sqlalchemy.orm import declarative_base, sessionmaker
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "src"))
 
@@ -18,27 +22,32 @@ from raw_enhancement.utils.processing import process_with_native_isp
 
 app = FastAPI()
 
-# Инициализация базы данных SQLite
-DB_PATH = "history.db"
+# Конфигурация подключения к базе данных
+DATABASE_URL = os.getenv("DATABASE_URL", "postgresql://postgres_user:postgres_password@localhost:5432/history_db")
 HISTORY_DIR = os.path.join("static", "history")
 os.makedirs(HISTORY_DIR, exist_ok=True)
 
+# Настройка фабрики сессий SQLAlchemy
+engine = create_engine(DATABASE_URL)
+SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
+Base = declarative_base()
+
+# Декларативная модель таблицы истории для SQLAlchemy
+class DBHistoryItem(Base):
+    __tablename__ = "history"
+    
+    id = Column(Integer, primary_key=True, index=True)
+    session_id = Column(String, index=True)
+    filename = Column(String)
+    output_img = Column(String)
+    strength = Column(Float)
+    exposure = Column(Float)
+    temp = Column(Float)
+    timestamp = Column(DateTime, default=datetime.datetime.utcnow)
+
+# Инициализация таблиц PostgreSQL
 def init_db():
-    conn = sqlite3.connect(DB_PATH)
-    cursor = conn.cursor()
-    cursor.execute("""
-        CREATE TABLE IF NOT EXISTS history (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            filename TEXT,
-            output_img TEXT,
-            strength REAL,
-            exposure REAL,
-            temp REAL,
-            timestamp DATETIME DEFAULT CURRENT_TIMESTAMP
-        )
-    """)
-    conn.commit()
-    conn.close()
+    Base.metadata.create_all(bind=engine)
 
 init_db()
 
@@ -47,7 +56,6 @@ app.mount("/ui", StaticFiles(directory="static", html=True), name="static")
 @app.get("/")
 async def root():
     return RedirectResponse(url="/ui")
-
 
 print("Загрузка нейросети...")
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
@@ -72,7 +80,8 @@ async def process_raw(
     file: UploadFile = File(...),
     strength: float = Form(100.0),
     exposure: float = Form(0.0),
-    temp: float = Form(0.0)
+    temp: float = Form(0.0),
+    session_id: str = Form("anonymous")
 ):
     import rawpy
 
@@ -97,35 +106,42 @@ async def process_raw(
         final_image = final_image * expo_factor
 
     if temp != 0.0:
-        temp_shift = temp * 0.5
+        temp_shift = temp * 0.5 
         final_image[:, :, 0] += temp_shift
         final_image[:, :, 2] -= temp_shift
 
     final_image = np.clip(final_image, 0, 255).astype(np.uint8)
 
     unique_id = uuid.uuid4().hex[:8]
-    unique_filename = f"result_{unique_id}.jpg"
-    orig_filename = f"orig_{unique_id}.jpg"
-
+    unique_filename = f"result_{unique_id}.png"
+    orig_filename = f"orig_{unique_id}.png" 
+    
     output_path = os.path.join(HISTORY_DIR, unique_filename)
     orig_output_path = os.path.join(HISTORY_DIR, orig_filename)
-
+    
     img_pil = Image.fromarray(final_image)
-    img_pil.save(output_path, quality=95)
-
+    img_pil.save(output_path, format="PNG")
+    
     orig_image_uint8 = np.clip(orig_image, 0, 255).astype(np.uint8)
-    Image.fromarray(orig_image_uint8).save(orig_output_path, quality=95)
-
+    Image.fromarray(orig_image_uint8).save(orig_output_path, format="PNG")
+    
     os.remove(temp_raw)
 
-    conn = sqlite3.connect(DB_PATH)
-    cursor = conn.cursor()
-    cursor.execute(
-        "INSERT INTO history (filename, output_img, strength, exposure, temp) VALUES (?, ?, ?, ?, ?)",
-        (file.filename, unique_filename, strength, exposure, temp)
-    )
-    conn.commit()
-    conn.close()
+    # Сохранение записи через ORM-сессию SQLAlchemy
+    db = SessionLocal()
+    try:
+        db_item = DBHistoryItem(
+            session_id=session_id,
+            filename=file.filename,
+            output_img=unique_filename,
+            strength=strength,
+            exposure=exposure,
+            temp=temp
+        )
+        db.add(db_item)
+        db.commit()
+    finally:
+        db.close()
 
     return {
         "processed": f"/ui/history/{unique_filename}",
@@ -133,20 +149,23 @@ async def process_raw(
     }
 
 @app.get("/api/history")
-async def get_history():
-    conn = sqlite3.connect(DB_PATH)
-    cursor = conn.cursor()
-    cursor.execute("SELECT id, filename, output_img, strength, exposure, temp FROM history ORDER BY id DESC")
-    rows = cursor.fetchall()
-    conn.close()
+async def get_history(session_id: str = "anonymous"):
+    db = SessionLocal()
+    try:
+        rows = db.query(DBHistoryItem)\
+                 .filter(DBHistoryItem.session_id == session_id)\
+                 .order_by(desc(DBHistoryItem.id))\
+                 .all()
+    finally:
+        db.close()
     
     return [
         {
-            "id": r[0],
-            "filename": r[1],
-            "output_img": f"/ui/history/{r[2]}",
-            "strength": r[3],
-            "exposure": r[4],
-            "temp": r[5]
-        } for r in rows
+            "id": item.id,
+            "filename": item.filename,
+            "output_img": f"/ui/history/{item.output_img}",
+            "strength": item.strength,
+            "exposure": item.exposure,
+            "temp": item.temp
+        } for item in rows
     ]
