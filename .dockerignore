@@ -1,0 +1,12 @@
+venv/
+.venv/
+env/
+__pycache__/
+*.pyc
+*.db
+history.db
+static/history/
+*.cr2
+*.cr3
+*.dng
+*.arw
